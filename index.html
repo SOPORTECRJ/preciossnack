@@ -133,6 +133,15 @@ tfoot td { font-weight: 700; background: var(--bg); }
 .note { font-size: 13px; color: var(--muted); margin-top: 10px; }
 .status { font-size: 13px; color: var(--muted); margin-top: 12px; }
 .status.warn { color: var(--bad); }
+.hint-lock { font-size: 13px; color: var(--muted); padding: 7px 0; }
+.lock { max-width: 320px; margin: 40px auto; display: flex; flex-direction: column; gap: 10px; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px 20px; }
+.lock-icon { color: var(--accent); }
+.lock h3 { font-family: var(--display); font-stretch: 85%; font-weight: 800; font-size: 22px; margin: 0; }
+.lock p { margin: 0; color: var(--muted); font-size: 14px; }
+.lock input { font: inherit; font-size: 20px; text-align: center; letter-spacing: .3em; padding: 10px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+.lock input:focus { outline: none; border-color: var(--accent); }
+.lock-err { color: var(--bad); font-size: 13px; min-height: 1em; }
+.link { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 0; text-decoration: underline; cursor: pointer; padding: 4px; }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(12px + env(safe-area-inset-top, 0px)); background: var(--fg); color: var(--bg); border-radius: 12px; padding: 10px 16px; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.18); max-width: calc(100% - 32px); z-index: 20; }
 @media (prefers-reduced-motion: no-preference) { .row { transition: background .25s; } }
 </style>
@@ -167,6 +176,7 @@ tfoot td { font-weight: 700; background: var(--bg); }
       <div class="chips" id="chips" role="group" aria-label="Filtrar por categoría"></div>
     </div>
     <div id="bar-registro" class="toolbar" hidden>
+      <div id="reg-tools" class="toolbar" style="flex:1" hidden>
       <div class="seg" id="period" role="group" aria-label="Periodo">
         <button type="button" data-d="1" aria-pressed="true">Hoy</button>
         <button type="button" data-d="7" aria-pressed="false">7 días</button>
@@ -175,7 +185,10 @@ tfoot td { font-weight: 700; background: var(--bg); }
       <div style="display:flex;gap:8px">
         <button class="btn" id="refresh" type="button">Actualizar</button>
         <button class="btn" id="export" type="button" hidden>Descargar CSV</button>
+        <button class="btn" id="lockbtn" type="button" title="Bloquear el registro">Bloquear</button>
       </div>
+      </div>
+      <div id="reg-locked-bar" class="hint-lock">Registro protegido con clave</div>
     </div>
   </div>
 </div>
@@ -186,6 +199,17 @@ tfoot td { font-weight: 700; background: var(--bg); }
     <div id="list"></div>
   </div>
   <div id="view-registro" hidden>
+    <form id="lock" class="lock" autocomplete="off">
+      <div class="lock-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+      <h3 id="lock-title">Registro protegido</h3>
+      <p id="lock-text">Escribe la clave para ver las ventas.</p>
+      <input id="pin1" type="password" inputmode="numeric" placeholder="Clave" aria-label="Clave">
+      <input id="pin2" type="password" inputmode="numeric" placeholder="Repite la clave" aria-label="Repite la clave" hidden>
+      <div class="lock-err" id="lock-err" role="alert"></div>
+      <button class="btn primary" id="lock-ok" type="submit">Entrar</button>
+      <button class="link" id="lock-change" type="button" hidden>Cambiar clave</button>
+    </form>
+    <div id="reg-content" hidden>
     <div class="kpis" id="kpis"></div>
     <div class="status" id="rstatus"></div>
     <section><h2>Por día · comparación con el sistema</h2>
@@ -195,6 +219,8 @@ tfoot td { font-weight: 700; background: var(--bg); }
     <section><h2>Por producto</h2>
       <div class="tbl-wrap"><table id="tprod"></table></div>
     </section>
+    <p class="note"><button class="link" id="chg" type="button">Cambiar la clave del registro</button></p>
+    </div>
   </div>
 </main>
 
@@ -385,6 +411,7 @@ $("cobrar").addEventListener("click", async () => {
 /* ---------- Registro / promedios ---------- */
 function dataFor(k) { return pedidos.filter(p => p.fecha === k); }
 function renderRegistro() {
+  if (!unlocked) return;
   const days = lastDays(period);
   let pedidos = 0, usd = 0, bs = 0, unidades = 0;
   const prod = {};
@@ -464,6 +491,66 @@ $("export").addEventListener("click", () => {
 });
 
 /* ---------- Vistas ---------- */
+/* ---------- Clave del registro ---------- */
+let unlocked = false, lockTimer = null, lockMode = "enter"; // enter | create | change
+async function hashPin(p) {
+  const txt = "preciossnack|" + p;
+  if (window.crypto && crypto.subtle) {
+    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
+    return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, "0")).join("");
+  }
+  let h = 5381; for (const c of txt) h = ((h << 5) + h + c.charCodeAt(0)) >>> 0; return "x" + h;
+}
+function setLockMode(m) {
+  lockMode = m;
+  const hasPin = !!load("regPin", null);
+  $("lock-title").textContent = m === "enter" ? "Registro protegido" : (hasPin ? "Nueva clave" : "Crea la clave del registro");
+  $("lock-text").textContent = m === "enter" ? "Escribe la clave para ver las ventas." : "Mínimo 4 dígitos o letras. Solo quien la sepa podrá ver el registro en este equipo.";
+  $("pin2").hidden = m === "enter";
+  $("lock-ok").textContent = m === "enter" ? "Entrar" : "Guardar clave";
+  $("lock-change").hidden = true;
+  $("lock-err").textContent = "";
+  $("pin1").value = ""; $("pin2").value = "";
+}
+function applyLock() {
+  $("lock").hidden = unlocked;
+  $("reg-content").hidden = !unlocked;
+  $("reg-tools").hidden = !unlocked;
+  $("reg-locked-bar").hidden = unlocked;
+}
+function lockNow() {
+  unlocked = false; clearTimeout(lockTimer);
+  for (const id of ["kpis", "tdays", "tprod"]) $(id).innerHTML = "";
+  setLockMode(load("regPin", null) ? "enter" : "create");
+  applyLock();
+}
+function touchLock() { clearTimeout(lockTimer); if (unlocked) lockTimer = setTimeout(lockNow, 5 * 60 * 1000); }
+let tries = 0, waitUntil = 0;
+$("lock").addEventListener("submit", async e => {
+  e.preventDefault();
+  const p1 = $("pin1").value.trim(), p2 = $("pin2").value.trim();
+  if (lockMode === "enter") {
+    if (Date.now() < waitUntil) { $("lock-err").textContent = "Demasiados intentos. Espera un momento."; return; }
+    if (await hashPin(p1) === load("regPin", null)) {
+      tries = 0; unlocked = true; applyLock(); renderRegistro(); loadPast(); touchLock();
+    } else {
+      tries++; $("pin1").value = "";
+      if (tries >= 5) { waitUntil = Date.now() + 30000; tries = 0; $("lock-err").textContent = "Clave incorrecta. Espera 30 segundos."; }
+      else $("lock-err").textContent = "Clave incorrecta.";
+    }
+    return;
+  }
+  if (p1.length < 4) { $("lock-err").textContent = "La clave debe tener al menos 4 caracteres."; return; }
+  if (p1 !== p2) { $("lock-err").textContent = "Las dos claves no coinciden."; return; }
+  if (!store("regPin", await hashPin(p1))) { $("lock-err").textContent = "No se pudo guardar la clave en este navegador."; return; }
+  toast("Clave guardada");
+  unlocked = true; setLockMode("enter"); applyLock(); renderRegistro(); loadPast(); touchLock();
+});
+$("lockbtn").addEventListener("click", () => { lockNow(); toast("Registro bloqueado"); });
+$("chg").addEventListener("click", () => { unlocked = false; applyLock(); setLockMode("change"); $("lock-change").hidden = true; $("pin1").focus(); });
+document.addEventListener("click", touchLock);
+document.addEventListener("keydown", touchLock);
+
 function show(v) {
   view = v;
   $("tab-pedido").setAttribute("aria-selected", v === "pedido");
@@ -473,7 +560,11 @@ function show(v) {
   $("view-pedido").hidden = v !== "pedido";
   $("view-registro").hidden = v !== "registro";
   renderTicket();
-  if (v === "registro") { renderRegistro(); loadPast(); }
+  if (v === "registro") {
+    applyLock();
+    if (unlocked) { renderRegistro(); loadPast(); touchLock(); }
+    else { setTimeout(() => $("pin1").focus(), 50); }
+  } else if (unlocked) { lockNow(); }
 }
 function route() { show(location.hash === "#registro" ? "registro" : "pedido"); }
 $("tab-pedido").addEventListener("click", () => { if (location.hash) location.hash = ""; else route(); });
@@ -498,6 +589,7 @@ $("period").addEventListener("click", e => {
 $("refresh").addEventListener("click", () => { pedidos = load("pedidos", []); sistema = load("sistema", {}); loadPast(); });
 $("tdays").addEventListener("change", e => { const i = e.target.closest(".sys"); if (i) saveSistema(i.dataset.k, i.value); });
 
+lockNow();
 renderTasa(); renderChips(); renderList(); route();
 
 /* Al abrir y cada 30 min: usa la tasa BCV, salvo que hoy la hayan escrito a mano */

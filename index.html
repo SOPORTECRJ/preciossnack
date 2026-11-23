@@ -96,6 +96,23 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 .line { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 4px 0; font-size: 14px; }
 .line .n { min-width: 0; overflow-wrap: anywhere; }
 .line .t { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.line .n small { display: block; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ticket-head { display: none; justify-content: space-between; align-items: baseline; gap: 10px; padding-bottom: 8px; border-bottom: 2px solid var(--mustard); margin-bottom: 6px; }
+.ticket-head h3 { font-family: var(--display); font-stretch: 82%; font-weight: 800; font-size: 24px; margin: 0; }
+.ticket-head span { font-size: 13px; color: var(--muted); }
+.t-empty { display: none; color: var(--muted); font-size: 14px; padding: 24px 0; text-align: center; }
+@media (min-width: 960px) {
+  body.side { padding-right: 380px; }
+  body.side .ticket { left: auto; top: 0; width: 380px; border-top: 0; border-left: 2px solid var(--fg); box-shadow: -8px 0 24px rgba(0,0,0,.08); padding-top: env(safe-area-inset-top, 0px); z-index: 11; }
+  body.side .ticket .wrap { height: 100%; display: flex; flex-direction: column; padding-block: 20px; padding-left: 20px; padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+  body.side .ticket-head { display: flex; }
+  body.side .t-empty { display: block; flex: 1; }
+  body.side .lines { max-height: none; flex: 1; min-height: 0; }
+  body.side .line { padding: 7px 0; border-bottom: 1px dashed var(--line); }
+  body.side .totals { grid-template-columns: 1fr; }
+  body.side .tot .v { font-size: 30px; }
+  body.side main { padding-bottom: 40px; }
+}
 .qty { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .qty button { font: inherit; font-weight: 700; width: 30px; height: 28px; border: 0; background: var(--bg); color: var(--fg); cursor: pointer; }
 .qty span { min-width: 28px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -224,8 +241,10 @@ tfoot td { font-weight: 700; background: var(--bg); }
   </div>
 </main>
 
-<div class="ticket" id="ticket" hidden>
+<aside class="ticket" id="ticket" aria-label="Pedido actual" hidden>
   <div class="wrap">
+    <div class="ticket-head"><h3>Pedido</h3><span id="t-count"></span></div>
+    <div class="t-empty" id="t-empty">Toca los productos para ir armando el pedido.</div>
     <div class="lines" id="lines"></div>
     <div class="totals">
       <div class="tot"><div class="l">Total divisa</div><div class="v" id="tot-usd">0,00</div></div>
@@ -233,10 +252,10 @@ tfoot td { font-weight: 700; background: var(--bg); }
     </div>
     <div class="actions">
       <button class="btn" id="vaciar" type="button">Vaciar</button>
-      <button class="btn primary" id="cobrar" type="button">Cobrar</button>
+      <button class="btn primary" id="cobrar" type="button">Consultar</button>
     </div>
   </div>
-</div>
+</aside>
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script>
@@ -367,29 +386,36 @@ function addItem(code, delta) {
   order = order.filter(x => x.qty > 0);
   saveOrder(); renderTicket(); renderList();
 }
+const SIDE = window.matchMedia("(min-width: 960px)");
 function renderTicket() {
-  const has = order.length > 0 && view === "pedido";
+  const side = SIDE.matches && view === "pedido";
+  const has = view === "pedido" && (order.length > 0 || side);
   $("ticket").hidden = !has;
-  document.body.classList.toggle("has-order", has);
-  if (!order.length) return;
+  document.body.classList.toggle("has-order", has && !side);
+  document.body.classList.toggle("side", side);
+  const units = order.reduce((s, o) => s + o.qty, 0);
+  $("t-count").textContent = units ? units + (units === 1 ? " producto" : " productos") : "";
+  $("t-empty").hidden = order.length > 0;
+  $("lines").hidden = !order.length;
   $("lines").innerHTML = order.map(o => {
     const it = BY_CODE[o.code];
     return `<div class="line"><span class="qty"><button type="button" data-code="${esc(o.code)}" data-d="-1" aria-label="Quitar uno">−</button><span>${o.qty}</span><button type="button" data-code="${esc(o.code)}" data-d="1" aria-label="Agregar uno">+</button></span>
-      <span class="n">${esc(it.name)}</span><span class="t">${fmt(it.price * o.qty)}</span></div>`;
+      <span class="n">${esc(it.name)}<small>${o.qty} × $ ${fmt(it.price)}</small></span><span class="t">${fmt(it.price * o.qty)}</span></div>`;
   }).join("");
   const usd = orderUSD();
   $("tot-usd").textContent = "$ " + fmt(usd);
   $("tot-bs").textContent = tasa ? "Bs " + fmt(usd * tasa) : "Falta la tasa";
-  $("cobrar").textContent = "Cobrar $ " + fmt(usd);
-  $("cobrar").disabled = !canWrite;
-  $("cobrar").title = canWrite ? "" : "Sin permiso para registrar pedidos";
+  $("cobrar").textContent = order.length ? "Consultar $ " + fmt(usd) : "Consultar";
+  $("cobrar").disabled = !order.length;
+  $("vaciar").disabled = !order.length;
 }
+if (SIDE.addEventListener) SIDE.addEventListener("change", renderTicket);
 $("lines").addEventListener("click", e => { const b = e.target.closest("button[data-code]"); if (b) addItem(b.dataset.code, Number(b.dataset.d)); });
 $("vaciar").addEventListener("click", () => { order = []; saveOrder(); renderTicket(); renderList(); });
 let saving = false;
 $("cobrar").addEventListener("click", async () => {
   if (!order.length || saving) return;
-  if (!tasa) { toast("Escribe la tasa del día antes de cobrar"); $("tasa").focus(); return; }
+  if (!tasa) { toast("Escribe la tasa del día antes de consultar"); $("tasa").focus(); return; }
   saving = true; $("cobrar").disabled = true;
   todayKey = dkey(new Date());
   const usd = orderUSD();
@@ -399,7 +425,7 @@ $("cobrar").addEventListener("click", async () => {
   };
   pedidos.push(doc);
   if (store("pedidos", pedidos)) {
-    toast("Cobrado y registrado · $ " + fmt(doc.totalUSD) + " · Bs " + fmt(doc.totalBs));
+    toast("Registrado · $ " + fmt(doc.totalUSD) + " · Bs " + fmt(doc.totalBs));
     order = []; saveOrder(); renderList();
   } else {
     pedidos.pop();
@@ -457,7 +483,7 @@ function renderRegistro() {
   $("tprod").innerHTML = plist.length
     ? `<thead><tr><th>Producto</th><th>Unid.</th><th>USD</th><th>Prom./día</th></tr></thead><tbody>${plist.map(([c, p]) =>
         `<tr><td><span class="code">${esc(c)}</span>${esc(p.name)}</td><td>${p.qty}</td><td>${fmt(p.usd)}</td><td>${fmt1(p.qty / Math.max(activeDays, 1))}</td></tr>`).join("")}</tbody>`
-    : `<tbody><tr><td class="empty" colspan="4"><strong>Sin pedidos en este periodo</strong>Monta un pedido en la pestaña “Pedido” y dale a Cobrar.</td></tr></tbody>`;
+    : `<tbody><tr><td class="empty" colspan="4"><strong>Sin pedidos en este periodo</strong>Monta un pedido en la pestaña “Pedido” y dale a Consultar.</td></tr></tbody>`;
 }
 
 function loadPast() { todayKey = dkey(new Date()); renderRegistro(); }
